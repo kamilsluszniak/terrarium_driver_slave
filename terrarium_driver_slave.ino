@@ -30,6 +30,7 @@ float i_factor = 0.05;
 float d_factor = 3.0;
 
 bool light_on = false;
+bool uv_on = false;
 float temp0set = 30.0;
 float dim_factor = 0;
 
@@ -43,20 +44,18 @@ int ind3;
 int ind4;
 int ind5;
 int ind6;
+int ind7;
 
-int diodaPin = A4;
+int heaterPin = 12;
+int uvPin = 6;
 
-/**
-   set update on a high edge
-*/
 ISR(PCINT0_vect) {
   if (PINB & (1 << PB2)) {
     /* LOW to HIGH pin change */
-    TCNT1  = 0;//initialize counter value to 0
-
-    if (true) {
+    if (light_on) {
       // 1 => 0.000064 s
-      OCR1A = 1;// triac_delay
+      turnTimerOn();
+      OCR1A = triac_delay;// triac_delay
       TIMSK1 |= (1 << OCIE1A);
     }
     counter++;
@@ -66,12 +65,30 @@ ISR(PCINT0_vect) {
 }
 
 ISR(TIMER1_COMPA_vect){  //change the 0 to 1 for timer1 and 2 for timer2
-  TIMSK1 = 0;
+  turnTimerOff();
   digitalWrite(12, HIGH);
+  t=0;
   for (int i = 0; i < 200; i++) {
     t++; // make sure high state is long enough - blocking delay not using ISR
   }
   digitalWrite(12, LOW);
+}
+
+void turnTimerOff() {
+  TCNT1  = 0;
+  TCCR1B = 0;
+  TCCR1A = 0;
+  TIMSK1 = 0;
+  TCNT0 = 0;
+}
+
+void turnTimerOn(){
+  TCNT1  = 0;//initialize counter value to 0
+  TCCR1B |= (1 << WGM12);
+  // Set CS12 and CS10 bits for 1024 prescaler
+  TCCR1B |= (1 << CS12) | (1 << CS10);
+  // enable timer compare interrupt
+  TIMSK1 |= (1 << OCIE1A);
 }
 
 
@@ -83,96 +100,70 @@ void setup()   {
   DDRB &= ~(1 << PB2);         // Clear the PB2 pin - input
   PORTB |= (1 << PB2);
 
-  //set timer1 interrupt at 1Hz
   TCCR1A = 0;// set entire TCCR1A register to 0
-  TCCR1B = 0;// same for TCCR1B
-  TCNT1  = 0;//initialize counter value to 0
-  // turn on CTC mode
-  TCCR1B |= (1 << WGM12);
-  // Set CS12 and CS10 bits for 1024 prescaler
-  TCCR1B |= (1 << CS12) | (1 << CS10);
-  // enable timer compare interrupt
-  TIMSK1 |= (1 << OCIE1A);
+  turnTimerOff();
+  turnTimerOn();
 
   Wire.begin(2);
   Wire.onReceive(dataRcv);
   Wire.onRequest(dataRqst);
   Serial.begin(115200);
-//  sensors.begin();
-  pinMode(12, OUTPUT);           // set pin to input
-//  pinMode(11, OUTPUT);
-//  digitalWrite(11, LOW);
+  sensors.begin();
+  pinMode(heaterPin, OUTPUT);
+  pinMode(uvPin, OUTPUT);
   sei();
 }
 
 void loop() {
-  delay(2000);
+  if (counter >= 200){ // 2 seconds
+    counter = 0;
     sensors.requestTemperatures();
     temp0 = sensors.getTempCByIndex(0);
     temp1 = sensors.getTempCByIndex(1);
-      char buffer[5];
+      
+    char buffer[5];
     temp0str = dtostrf(temp0, 1, 2, buffer);
     temp1str = dtostrf(temp1, 1, 2, buffer);
-  String msg = String(temp0str) + "," + String(temp1str);
-  msg.toCharArray(reports_buffer, 22); //-127.00,-127.00
-  Serial.println(reports_buffer);
-
-  if (true) { // counter >= 100
-    counter = 0;
-    
-
-    Serial.println("driver:");
+    String msg = String(temp0str) + "," + String(temp1str);
+    msg.toCharArray(reports_buffer, 22); //-127.00,-127.00
+    Serial.print("light_on: ");
+    Serial.println(light_on);
+    Serial.print("temp0: ");
+    Serial.println(temp0);
+    if(uv_on) {
+      digitalWrite(uvPin, HIGH);
+    }
+    else {
+      digitalWrite(uvPin, LOW);
+    }
     if (light_on) {
-//      if (num_time >= (num_off_time - 60)) {
-//        float delta_temp = temp0set - temp1;
-//        e = temp1 + (delta_temp * slope) - temp0;
-
-//      }
-//      else {
-        e = temp0set - temp0;
-        Serial.print("e: ");
-        Serial.println(e);
-//      }
-
+      e = temp0set - temp0;
       if (pid <= 130) {
         i += e;
       }
       d = (e - e0);
       pid = p_factor * e + i_factor * i + d_factor * d;
+      Serial.print("pid: ");
+      Serial.println(pid);
 
       if (pid > 130) {
         pid = 130;
       }
-
-      Serial.print("pid: ");
-       Serial.println(pid);
       triac_delay = int(140 - dim_factor * pid);
-      Serial.println(triac_delay);
-
-
       if (triac_delay > 140) {
         triac_delay = 140;
       }
       if (triac_delay < 10) {
         triac_delay = 10;
       }
-
+      Serial.print("triac_delay: ");
+      Serial.println(triac_delay);
       e0 = e;
     }
     else {
       triac_delay = 140;
-      pid = 0;
-      i = 0;
-      d = 0;
     }
-
-
-    if (light_on) {
-      digitalWrite(6, HIGH);
-    }
-    else {
-      digitalWrite(6, LOW);
-    }
+    counter = 0;
   }
 }
 
@@ -185,10 +176,7 @@ void dataRcv(int howMany){
     }
   }
   command_string = command_buffer;
-  
-  Serial.println();
-  Serial.println("captured String is :");
-  Serial.println(command_string); //prints string to serial port out
+  Serial.println(command_string);
  
   ind1 = command_string.indexOf(',');  //finds location of first ,
   light_on = command_string.substring(0, ind1).toInt() == 1 ? true : false;   //captures first data String
@@ -201,26 +189,12 @@ void dataRcv(int howMany){
   ind5 = command_string.indexOf(',', ind4+1 );
   i_factor = command_string.substring(ind4+1, ind5+1).toFloat();
   ind6 = command_string.indexOf(',', ind5+1 );
-  d_factor = command_string.substring(ind5+1).toFloat();
-
-  Serial.print("light_on = ");
-  Serial.println(light_on);
-  Serial.print("temp0set = ");
-  Serial.println(temp0set);
-  Serial.print("dim_factor = ");
-  Serial.println(dim_factor);
-  Serial.print("p_factor = ");
-  Serial.println(p_factor);
-  Serial.print("i_factor = ");
-  Serial.println(i_factor);
-  Serial.print("d_factor = ");
-  Serial.println(d_factor);
-  Serial.println();
-  Serial.println();
+  d_factor = command_string.substring(ind5+1, ind6+1).toFloat();
+  ind7 = command_string.indexOf(',', ind6+1 );
+  uv_on = command_string.substring(ind6+1).toInt() == 1 ? true : false;
 }
 
 // requests data handler function
 void dataRqst(){
-
   Wire.write(reports_buffer);
 }
