@@ -37,6 +37,7 @@ float dim_factor = 0;
 char buffer[5];
 String temp0str;
 String temp1str;
+String pidstr;
 
 int ind1;
 int ind2;
@@ -115,7 +116,7 @@ void setup()   {
 }
 
 void loop() {
-  if (counter >= 200){ // 2 seconds
+  if (counter >= 100){ // 1 second
     counter = 0;
     sensors.requestTemperatures();
     temp0 = sensors.getTempCByIndex(0);
@@ -124,12 +125,10 @@ void loop() {
     char buffer[5];
     temp0str = dtostrf(temp0, 1, 2, buffer);
     temp1str = dtostrf(temp1, 1, 2, buffer);
-    String msg = String(temp0str) + "," + String(temp1str);
-    msg.toCharArray(reports_buffer, 22); //-127.00,-127.00
-    Serial.print("light_on: ");
-    Serial.println(light_on);
-    Serial.print("temp0: ");
-    Serial.println(temp0);
+    pidstr = dtostrf(pid, 1, 2, buffer);
+    String msg = String(temp0str) + "," + String(temp1str) + "," + String(pidstr);
+    msg.toCharArray(reports_buffer, 22);
+
     if(uv_on) {
       digitalWrite(uvPin, HIGH);
     }
@@ -142,13 +141,14 @@ void loop() {
         i += e;
       }
       d = (e - e0);
-      pid = p_factor * e + i_factor * i + d_factor * d;
-      Serial.print("pid: ");
-      Serial.println(pid);
-
-      if (pid > 130) {
-        pid = 130;
+      if (i < 0) {
+        i = 0;
       }
+      pid = p_factor * e + i_factor * i + d_factor * d;
+      if (pid < 0) {
+        pid < 0;
+      }
+
       triac_delay = int(140 - dim_factor * pid);
       if (triac_delay > 140) {
         triac_delay = 140;
@@ -156,12 +156,14 @@ void loop() {
       if (triac_delay < 10) {
         triac_delay = 10;
       }
-      Serial.print("triac_delay: ");
-      Serial.println(triac_delay);
+
       e0 = e;
     }
     else {
       triac_delay = 140;
+      pid = 0;
+      i = 0;
+      d = 0;
     }
     counter = 0;
   }
